@@ -8,10 +8,18 @@ use Psr\EventDispatcher\EventDispatcherInterface;
 use Aegis\Backoff\ExponentialBackoff;
 use Aegis\Contract\BackoffInterface;
 use Aegis\Contract\StrategyInterface;
+use Aegis\Strategy\Bulkhead\BulkheadOptions;
+use Aegis\Strategy\Bulkhead\BulkheadStrategy;
+use Aegis\Strategy\Bulkhead\Storage\InMemoryStorage as BulkheadInMemoryStorage;
+use Aegis\Strategy\Bulkhead\Storage\StorageInterface as BulkheadStorageInterface;
 use Aegis\Strategy\CircuitBreaker\CircuitBreakerOptions;
 use Aegis\Strategy\CircuitBreaker\CircuitBreakerStrategy;
 use Aegis\Strategy\CircuitBreaker\Storage\InMemoryStorage;
 use Aegis\Strategy\CircuitBreaker\Storage\StorageInterface;
+use Aegis\Strategy\RateLimiter\RateLimiterOptions;
+use Aegis\Strategy\RateLimiter\RateLimiterStrategy;
+use Aegis\Strategy\RateLimiter\Storage\InMemoryStorage as RateLimiterInMemoryStorage;
+use Aegis\Strategy\RateLimiter\Storage\StorageInterface as RateLimiterStorageInterface;
 use Aegis\Strategy\Retry\RetryOptions;
 use Aegis\Strategy\Retry\RetryStrategy;
 use Aegis\Strategy\Timeout\TimeoutStrategy;
@@ -81,6 +89,44 @@ final class ResiliencePipelineBuilder
     public function timeout(Duration $duration): static
     {
         $this->strategies[] = new TimeoutStrategy($duration);
+        return $this;
+    }
+
+    /**
+     * Add a Rate Limiter strategy (Fixed Window).
+     *
+     * @param string                       $name    Unique identifier.
+     * @param int                          $limit   Maximum calls per window.
+     * @param Duration|null                $window  Window length. Defaults to 60 seconds.
+     * @param RateLimiterStorageInterface|null $storage Defaults to InMemoryStorage.
+     */
+    public function rateLimit(
+        string                      $name,
+        int                         $limit = 100,
+        ?Duration                   $window = null,
+        ?RateLimiterStorageInterface $storage = null,
+    ): static {
+        $options = new RateLimiterOptions($name, $limit, $window);
+        $storage ??= new RateLimiterInMemoryStorage();
+        $this->strategies[] = new RateLimiterStrategy($options, $storage, $this->dispatcher);
+        return $this;
+    }
+
+    /**
+     * Add a Bulkhead strategy (concurrency limiter).
+     *
+     * @param string                      $name          Unique identifier.
+     * @param int                         $maxConcurrent Maximum concurrent executions. Defaults to 10.
+     * @param BulkheadStorageInterface|null $storage      Defaults to InMemoryStorage.
+     */
+    public function bulkhead(
+        string                    $name,
+        int                       $maxConcurrent = 10,
+        ?BulkheadStorageInterface $storage = null,
+    ): static {
+        $options = new BulkheadOptions($name, $maxConcurrent);
+        $storage ??= new BulkheadInMemoryStorage();
+        $this->strategies[] = new BulkheadStrategy($options, $storage, $this->dispatcher);
         return $this;
     }
 
