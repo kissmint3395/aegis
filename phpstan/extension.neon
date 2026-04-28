@@ -1,0 +1,5 @@
+services:
+    -
+        class: Aegis\PHPStan\Rules\RetryOnThrowableRule
+        tags:
+            - phpstan.rules.rule
