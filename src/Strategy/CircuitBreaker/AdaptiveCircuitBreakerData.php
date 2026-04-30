@@ -27,7 +27,7 @@ final readonly class AdaptiveCircuitBreakerData
 
     public function failureRate(): float
     {
-        if (empty($this->window)) {
+        if ($this->window === []) {
             return 0.0;
         }
         $failures = count(array_filter($this->window, fn (bool $r) => !$r));

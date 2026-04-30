@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Aegis\Strategy\Hedge;
 
-use Psr\EventDispatcher\EventDispatcherInterface;
 use Aegis\Contract\StrategyInterface;
 use Aegis\Exception\HedgeExhaustedException;
 
@@ -19,8 +18,7 @@ use Aegis\Exception\HedgeExhaustedException;
 final class HedgeStrategy implements StrategyInterface
 {
     public function __construct(
-        private readonly HedgeOptions             $options,
-        private readonly EventDispatcherInterface $dispatcher,
+        private readonly HedgeOptions $options,
     ) {}
 
     public function execute(callable $next): mixed
@@ -28,72 +26,66 @@ final class HedgeStrategy implements StrategyInterface
         $startMs     = (int)(microtime(true) * 1000);
         $delayMs     = $this->options->delay->toMilliseconds();
         $maxHedges   = $this->options->maxHedges;
-        $firstResult = null;
-        $hasResult   = false;
-        /** @var array<int, \Throwable> */
-        $throwables  = [];
         $hedgesFired = 0;
 
-        /** @var list<\Fiber<void, void, void, void>> */
-        $fibers = [];
+        /** @var list<\Fiber<mixed, void, mixed, void>> */
+        $fibers     = [];
+        /** @var list<\Throwable> */
+        $throwables = [];
 
-        $spawnFiber = function () use ($next, &$fibers, &$firstResult, &$hasResult, &$throwables): void {
-            $idx   = count($fibers);
-            $fiber = new \Fiber(static function () use ($next, $idx, &$firstResult, &$hasResult, &$throwables): void {
-                try {
-                    $result = $next();
-                    if (!$hasResult) {
-                        $firstResult = $result;
-                        $hasResult   = true;
-                    }
-                } catch (\Throwable $e) {
-                    $throwables[$idx] = $e;
-                }
-            });
+        // Returns the fiber when it completed synchronously; null when suspended or threw.
+        $startFiber = function () use ($next, &$fibers, &$throwables): ?\Fiber {
+            /** @var \Fiber<mixed, void, mixed, void> */
+            $fiber = new \Fiber($next);
             $fibers[] = $fiber;
-            $fiber->start();
+            try {
+                $fiber->start();
+                if ($fiber->isTerminated()) {
+                    return $fiber;
+                }
+            } catch (\Throwable $e) {
+                $throwables[] = $e;
+            }
+            return null;
         };
 
-        $spawnFiber(); // primary attempt
-
-        if ($hasResult) {
-            return $firstResult;
+        $done = $startFiber(); // primary
+        if ($done !== null) {
+            return $done->getReturn();
         }
 
         while (true) {
             $nowMs     = (int)(microtime(true) * 1000);
             $suspended = array_filter($fibers, static fn(\Fiber $f): bool => $f->isSuspended());
+            $elapsed   = ($nowMs - $startMs) >= $delayMs;
+            $syncFail  = $suspended === [];
 
-            // Fire a hedge when: delay elapsed, OR no suspended fibers + failure detected (sync mode)
-            $syncFailMode = empty($suspended) && !$hasResult && !empty($throwables);
-            if ($hedgesFired < $maxHedges && (($nowMs - $startMs) >= $delayMs || $syncFailMode)) {
-                $spawnFiber();
+            if ($hedgesFired < $maxHedges && ($elapsed || $syncFail)) {
+                $done = $startFiber();
                 $hedgesFired++;
-                if ($hasResult) {
-                    break;
+                if ($done !== null) {
+                    return $done->getReturn();
                 }
-                continue; // re-evaluate after spawning
+                continue;
             }
 
-            // Resume all suspended fibers
             foreach ($suspended as $fiber) {
-                $fiber->resume();
-                if ($hasResult) {
-                    break 2;
+                try {
+                    $fiber->resume();
+                    if ($fiber->isTerminated()) {
+                        return $fiber->getReturn();
+                    }
+                } catch (\Throwable $e) {
+                    $throwables[] = $e;
                 }
             }
 
-            // Determine whether to continue
             $stillSuspended = array_filter($fibers, static fn(\Fiber $f): bool => $f->isSuspended());
-            if (empty($stillSuspended) && $hedgesFired >= $maxHedges) {
+            if ($stillSuspended === [] && $hedgesFired >= $maxHedges) {
                 break;
             }
         }
 
-        if ($hasResult) {
-            return $firstResult;
-        }
-
-        throw new HedgeExhaustedException(array_values($throwables));
+        throw new HedgeExhaustedException($throwables);
     }
 }

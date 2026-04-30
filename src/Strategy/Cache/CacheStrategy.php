@@ -4,14 +4,12 @@ declare(strict_types=1);
 
 namespace Aegis\Strategy\Cache;
 
-use Psr\EventDispatcher\EventDispatcherInterface;
 use Aegis\Contract\StrategyInterface;
 
 final class CacheStrategy implements StrategyInterface
 {
     public function __construct(
-        private readonly CacheOptions             $options,
-        private readonly EventDispatcherInterface $dispatcher,
+        private readonly CacheOptions $options,
     ) {}
 
     public function execute(callable $next): mixed
