@@ -1,5 +1,7 @@
 /vendor/
+/docs/
 /composer.lock
 /.phpunit.cache/
 /.phpunit.result.cache
 /.claude/
+betterleaks-report.json
